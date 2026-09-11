@@ -1,0 +1,9 @@
+.icon-cache/
+node_modules/
+package-lock.json
+examples/icons/
+examples/out/
+icons/
+out/
+*.tmp.svg
+.DS_Store
