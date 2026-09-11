@@ -49,13 +49,37 @@ def http(url):
 def npm_pkg(name):
     """Install a package into the shared cache once; return its directory."""
     CACHE.mkdir(parents=True, exist_ok=True)
+    # npm resolves the project root by walking UP from cwd. Without a manifest
+    # here it finds the one the README tells you to create for pptxgenjs and
+    # installs the icon sets into THAT node_modules instead, leaving the
+    # catalogue lookups below pointing at a directory that never appears.
+    marker = CACHE / "package.json"
+    if not marker.exists():
+        marker.write_text('{"name":"arch-icon-cache","private":true}', encoding="utf-8")
     d = CACHE / "node_modules" / name
     if not d.exists():
         need("npm", f"It is needed to fetch the {name} icon set.")
         print(f"fetching {name} ...")
-        subprocess.run(["npm", "install", name, "--no-audit", "--no-fund", "--silent"],
+        # shutil.which, not the bare name: on Windows npm is npm.cmd, and
+        # CreateProcess does not apply PATHEXT to an exact argv[0], so a bare
+        # "npm" raises FileNotFoundError even though `need` just found it.
+        subprocess.run([shutil.which("npm") or "npm", "install", name, "--no-audit", "--no-fund", "--silent"],
                        cwd=CACHE, check=True)
     return d
+
+
+# rsvg-convert ships no Windows build. resvg is the same job in one static
+# binary (scoop install resvg / cargo install resvg), so take whichever is on
+# PATH — rsvg-convert first, leaving macOS and Linux behaviour untouched.
+def svg_to_png_cmd(svg, png, size):
+    rsvg = shutil.which("rsvg-convert")
+    if rsvg:
+        return [rsvg, "-w", str(size), "-h", str(size), "-o", str(png), str(svg)]
+    resvg = shutil.which("resvg")
+    if resvg:
+        return [resvg, "--width", str(size), "--height", str(size), str(svg), str(png)]
+    die("no SVG rasteriser found. Install one: brew install librsvg / "
+        "apt install librsvg2-bin / scoop install resvg")
 
 
 def rasterise(svg_text, png_path, size=256, fill=None, desaturate=False):
@@ -70,9 +94,8 @@ def rasterise(svg_text, png_path, size=256, fill=None, desaturate=False):
                     + '<g filter="url(#d)" opacity="0.72">' + inner + "</g></svg>")
     png_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = png_path.with_suffix(".tmp.svg")
-    tmp.write_text(svg_text)
-    subprocess.run(["rsvg-convert", "-w", str(size), "-h", str(size), "-o", str(png_path), str(tmp)],
-                   check=True, capture_output=True)
+    tmp.write_text(svg_text, encoding="utf-8")
+    subprocess.run(svg_to_png_cmd(tmp, png_path, size), check=True, capture_output=True)
     tmp.unlink()
 
 
@@ -81,7 +104,7 @@ def azure_catalogue():
     """Icon name -> repository path. Built from the upstream tree, cached locally."""
     cache = CACHE / "azure_catalogue.json"
     if cache.exists():
-        return json.loads(cache.read_text())
+        return json.loads(cache.read_text(encoding="utf-8"))
     print("building the Azure catalogue ...")
     tree = json.loads(http(AZURE_TREE))["tree"]
     cat = {}
@@ -90,7 +113,7 @@ def azure_catalogue():
         if AZURE_DIR in p and p.endswith(".svg"):
             cat[pathlib.Path(p).stem] = p
     CACHE.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps(cat, indent=0, sort_keys=True))
+    cache.write_text(json.dumps(cat, indent=0, sort_keys=True), encoding="utf-8")
     print(f"  {len(cat)} Azure icons catalogued")
     return cat
 
@@ -102,7 +125,7 @@ def aws_catalogue():
 
 def oss_catalogue():
     d = npm_pkg("simple-icons")
-    data = json.loads((d / "data" / "simple-icons.json").read_text())
+    data = json.loads((d / "data" / "simple-icons.json").read_text(encoding="utf-8"))
     icons = data.get("icons", data) if isinstance(data, dict) else data
     out = {}
     for it in icons:
@@ -137,7 +160,7 @@ def do_aws(names, grey):
             near = [k for k in cat if n.lower() in k.lower()][:4]
             print(f"  NOT FOUND (aws): {n}" + (f"   did you mean: {', '.join(near)}" if near else ""))
             continue
-        svg = p.read_text()
+        svg = p.read_text(encoding="utf-8")
         rasterise(svg, OUT / "aws" / "png" / f"{p.stem}.png")
         if grey:
             rasterise(svg, OUT / "aws" / "grey" / f"{p.stem}.png", desaturate=True)
@@ -154,7 +177,7 @@ def do_oss(names, grey):
             print(f"  NOT FOUND (oss): {n}  — use a wordmark tile instead of a lookalike logo")
             continue
         title, hexv = cat.get(slug, (n, "333333"))
-        svg = svg_path.read_text()
+        svg = svg_path.read_text(encoding="utf-8")
         rasterise(svg, OUT / "oss" / "png" / f"{slug}.png", fill="#" + hexv)
         if grey:
             rasterise(svg, OUT / "oss" / "grey" / f"{slug}.png", desaturate=True)
@@ -193,7 +216,9 @@ def main():
         return
     if not a.source or not a.names:
         ap.error("give a source (azure|aws|oss) and at least one name, or use --list")
-    need("rsvg-convert", "Install it: brew install librsvg  /  apt install librsvg2-bin")
+    if not shutil.which("rsvg-convert") and not shutil.which("resvg"):
+        die("no SVG rasteriser found. Install one: brew install librsvg  /  "
+            "apt install librsvg2-bin  /  scoop install resvg")
     {"azure": do_azure, "aws": do_aws, "oss": do_oss}[a.source](a.names, a.grey)
 
 
