@@ -52,7 +52,7 @@ def main():
                f'<feColorMatrix type="matrix" values="0 0 0 0 {r} 0 0 0 0 {g} 0 0 0 0 {b} 0 0 0 1 0"/></filter>'
                f'<image filter="url(#t)" x="0" y="0" width="{w0}" height="{h0}" '
                f'xlink:href="data:image/png;base64,{b64}"/></svg>')
-        tmp = out / (name + ".svg"); tmp.write_text(svg)
+        tmp = out / (name + ".svg"); tmp.write_text(svg, encoding="utf-8")
         png = out / (name + ".png")
         cmd = ["rsvg-convert", "-w", str(a.width), "-o", str(png), str(tmp)]
         subprocess.run(cmd, check=True)
